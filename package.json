@@ -1,0 +1,12 @@
+{
+  "name": "tcs-program-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.9",
+    "jsdom": "29.1.1"
+  }
+}

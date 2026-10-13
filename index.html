@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>TCS — Program Monitoring</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg: #e8ecef;
+            --panel: #fff;
+            --ink: #14283a;
+            --mute: #5b6b78;
+            --line: #cfd7dd;
+            --accent: #0f6e8c;
+            --ok: #1f8a4c;
+            --warn: #c98a00;
+            --bad: #c23b2e;
+            --hold: #7a8691;
+            box-sizing: border-box;
+            padding-top: env(safe-area-inset-top, 0px);
+            padding-bottom: env(safe-area-inset-bottom, 0px)
+        }
+
+        @media (prefers-color-scheme:dark) {
+            :root:not([data-theme="light"]) {
+                --bg: #101a22;
+                --panel: #18252f;
+                --ink: #e6edf2;
+                --mute: #97a8b5;
+                --line: #2c3d49;
+                --accent: #4fb6d6;
+                --ok: #3fbf75;
+                --warn: #e3a82a;
+                --bad: #ee6a5b;
+                --hold: #8b99a4
+            }
+        }
+
+        :root[data-theme="dark"] {
+            --bg: #101a22;
+            --panel: #18252f;
+            --ink: #e6edf2;
+            --mute: #97a8b5;
+            --line: #2c3d49;
+            --accent: #4fb6d6;
+            --ok: #3fbf75;
+            --warn: #e3a82a;
+            --bad: #ee6a5b;
+            --hold: #8b99a4
+        }
+
+        html {
+            scroll-padding-top: env(safe-area-inset-top, 0px)
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--ink);
+            font: 400 15px/1.45 Barlow, system-ui, sans-serif
+        }
+
+        .wrap {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 20px 16px 40px
+        }
+
+        header {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: flex-end;
+            gap: 10px;
+            margin-bottom: 16px
+        }
+
+        h1 {
+            font: 700 30px/1.1 "Barlow Condensed", sans-serif;
+            margin: 0
+        }
+
+        .sub {
+            color: var(--mute);
+            font-size: 13px
+        }
+
+        button,
+        select,
+        input {
+            font: inherit;
+            color: var(--ink)
+        }
+
+        button {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 6px 12px;
+            cursor: pointer
+        }
+
+        button.pri {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+            font-weight: 500
+        }
+
+        :focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 2px
+        }
+
+        button:disabled,
+        input:disabled,
+        select:disabled {
+            opacity: .65;
+            cursor: wait
+        }
+
+        .kpis {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-bottom: 14px
+        }
+
+        .kpi {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-left: 5px solid var(--c, var(--accent));
+            border-radius: 4px;
+            padding: 10px 12px;
+            cursor: pointer;
+            text-align: left
+        }
+
+        .kpi b {
+            display: block;
+            font: 700 34px/1 "Barlow Condensed", sans-serif
+        }
+
+        .kpi span {
+            color: var(--mute);
+            font-size: 13px
+        }
+
+        .kpi.on {
+            outline: 2px solid var(--c, var(--accent))
+        }
+
+        .bar {
+            display: flex;
+            height: 10px;
+            border-radius: 5px;
+            overflow: hidden;
+            background: var(--line);
+            margin-bottom: 14px
+        }
+
+        .bar i {
+            display: block
+        }
+
+        .tools {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 10px
+        }
+
+        .tools input,
+        .tools select {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 6px 10px
+        }
+
+        .tools input[type=search] {
+            flex: 1;
+            min-width: 160px
+        }
+
+        .tbl {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            overflow-x: auto
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 760px
+        }
+
+        th,
+        td {
+            padding: 9px 10px;
+            text-align: left;
+            border-bottom: 1px solid var(--line);
+            vertical-align: middle
+        }
+
+        th {
+            font: 600 14px "Barlow Condensed", sans-serif;
+            color: var(--mute);
+            letter-spacing: .03em
+        }
+
+        tr:last-child td {
+            border-bottom: 0
+        }
+
+        td small {
+            display: block;
+            color: var(--mute)
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 500
+        }
+
+        .pill:before {
+            content: "";
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--c)
+        }
+
+        .prog {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 130px
+        }
+
+        .prog div {
+            flex: 1;
+            height: 8px;
+            background: var(--line);
+            border-radius: 4px;
+            overflow: hidden
+        }
+
+        .prog div i {
+            display: block;
+            height: 100%;
+            background: var(--c)
+        }
+
+        td select,
+        td input[type=number] {
+            background: transparent;
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 3px 6px
+        }
+
+        td input[type=number] {
+            width: 64px
+        }
+
+        .x {
+            border: 0;
+            background: none;
+            color: var(--mute);
+            padding: 2px 8px
+        }
+
+        .add {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 8px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 12px;
+            margin-top: 14px
+        }
+
+        .add input,
+        .add select {
+            background: transparent;
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 6px 8px;
+            width: 100%
+        }
+
+        .empty {
+            padding: 24px;
+            text-align: center;
+            color: var(--mute)
+        }
+
+        .nm {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start
+        }
+
+        .tg {
+            width: 26px;
+            height: 26px;
+            padding: 0;
+            line-height: 1;
+            font-weight: 700;
+            flex: none
+        }
+
+        tr.sub td {
+            background: color-mix(in srgb, var(--bg) 55%, var(--panel));
+            padding-top: 6px;
+            padding-bottom: 6px
+        }
+
+        tr.sub .ind {
+            padding-left: 34px;
+            display: block
+        }
+
+        tr.sub input[type=text] {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 5px 8px;
+            width: min(320px, 60%);
+            margin-left: 34px
+        }
+
+        .pct {
+            font-weight: 600;
+            min-width: 38px;
+            text-align: right
+        }
+
+        .chartbox {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 10px 12px;
+            margin-bottom: 14px
+        }
+
+        .chartbox h2 {
+            font: 600 17px "Barlow Condensed", sans-serif;
+            margin: 0 0 2px
+        }
+
+        .leg {
+            font-size: 12px;
+            color: var(--mute);
+            margin-bottom: 6px
+        }
+
+        .leg i {
+            display: inline-block;
+            width: 12px;
+            height: 10px;
+            vertical-align: middle;
+            margin: 0 4px 0 8px
+        }
+
+        .subfunction-charts {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin-top: 14px
+        }
+
+        .subfunction-chart {
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 12px;
+            min-width: 0
+        }
+
+        .subfunction-chart h3 {
+            font: 600 16px "Barlow Condensed", sans-serif;
+            margin: 0 0 26px;
+            min-height: 38px
+        }
+
+        .chart-bars {
+            display: flex;
+            gap: 32px;
+            align-items: flex-end;
+            justify-content: center;
+            height: 170px;
+            border-bottom: 1px solid var(--line)
+        }
+
+        .chart-column {
+            width: 48px;
+            position: relative;
+            border-radius: 3px 3px 0 0
+        }
+
+        .total-bar {
+            border: 2px solid var(--mute);
+            border-bottom: 0
+        }
+
+        .status-bar {
+            display: flex;
+            flex-direction: column
+        }
+
+        .status-segment {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600
+        }
+
+        .chart-count {
+            position: absolute;
+            top: -22px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 14px;
+            font-weight: 600
+        }
+
+        .chart-labels {
+            display: flex;
+            justify-content: center;
+            gap: 32px;
+            text-align: center;
+            font-size: 12px;
+            color: var(--mute);
+            margin: 6px 0 12px
+        }
+
+        .chart-labels span {
+            width: 48px
+        }
+
+        .chart-breakdown {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 12px;
+            font-size: 12px
+        }
+
+        .chart-breakdown .pill:before {
+            width: 8px;
+            height: 8px
+        }
+
+        @media (max-width: 1050px) {
+            .subfunction-charts {
+                grid-template-columns: repeat(2, minmax(0, 1fr))
+            }
+        }
+
+        @media (max-width: 560px) {
+            .subfunction-charts {
+                grid-template-columns: 1fr
+            }
+        }
+
+        .qt {
+            overflow-x: auto;
+            padding-left: 34px
+        }
+
+        .qt table {
+            min-width: 0;
+            width: 100%;
+            font-size: 13px
+        }
+
+        .qt th,
+        .qt td {
+            padding: 5px 6px;
+            text-align: center
+        }
+
+        .qt th:first-child,
+        .qt td:first-child {
+            text-align: left
+        }
+
+        .qt input[type=number] {
+            width: 54px;
+            text-align: center;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 3px 4px
+        }
+
+        .qt select {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 3px 4px
+        }
+
+        .qt tr.tot td {
+            font-weight: 600;
+            border-bottom: 2px solid var(--line)
+        }
+
+        .qt .cur {
+            background: color-mix(in srgb, var(--accent) 12%, transparent)
+        }
+
+        .qt table.subtable {
+            min-width: 1040px
+        }
+
+        .subtable td input[type=text],
+        .subtable td input[type=date] {
+            margin: 0;
+            width: 100%;
+            min-width: 130px;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 4px 6px
+        }
+
+        .subtable td select {
+            max-width: 230px
+        }
+
+        .weight-total {
+            margin: 8px 0 10px 34px;
+            font-weight: 500
+        }
+
+        .weight-total.invalid {
+            color: var(--bad)
+        }
+
+        tr.sub input[type=text].nw {
+            margin-left: 34px
+        }
+    </style>
+</head>
+
+<body>
+    <div class="wrap">
+        <header>
+            <div>
+                <h1>Program Monitoring — TCS</h1>
+                <div class="sub">Function: TCS</div>
+                <div class="sub" id="date"></div>
+            </div>
+            <div><button id="theme">Switch Theme</button>
+            </div>
+        </header>
+        <div class="kpis" id="kpis"></div>
+        <div class="bar" id="bar" aria-hidden="true"></div>
+        <div class="chartbox" id="chart"></div>
+        <div class="tools">
+            <input type="search" id="q" placeholder="Search programs" aria-label="Search programs">
+            <select id="area" aria-label="Filter by subfunction"></select>
+            <button id="exp">Expand All</button>
+        </div>
+        <div class="tbl">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Program</th>
+                        <th>Subfunction</th>
+                        <th>Status</th>
+                        <th>Progress</th>
+                        <th>Target Date</th>
+                        <th>Remarks</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="rows"></tbody>
+            </table>
+            <div class="empty" id="empty" hidden>No programs yet. Add a program to get started.</div>
+        </div>
+        <div class="add">
+            <input id="nName" placeholder="Program name" aria-label="Program name">
+            <select id="nArea" aria-label="Subfunction"></select>
+            <input id="nDate" type="date" aria-label="Program target date">
+            <button class="pri" id="addBtn">Add Program</button>
+        </div>
+    </div>
+    <script type="module" src="./app.mjs"></script>
+</body>
+
+</html>

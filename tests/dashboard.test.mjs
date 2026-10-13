@@ -1,0 +1,338 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { createDashboardStore } from '../supabase/store.mjs';
+import { mountDashboard } from '../dashboard.mjs';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const dependencyRoot = process.env.TCS_TEST_MODULE_ROOT;
+const requireDependency = createRequire(dependencyRoot ? path.join(dependencyRoot, 'package.json') : import.meta.url);
+const { PGlite } = requireDependency('@electric-sql/pglite');
+const { JSDOM } = requireDependency('jsdom');
+const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+const schema = fs.readFileSync(path.join(root, 'supabase/schema.sql'), 'utf8');
+const autoWeights = fs.readFileSync(path.join(root, 'supabase/auto-weights.sql'), 'utf8');
+
+// Emulate the Supabase query interface with real PostgreSQL queries.
+// Requests are executed as the anon role, so grants, RLS, views and constraints apply.
+function databaseClient(db) {
+    const tables = new Set(['tcs_subfunctions', 'tcs_programs', 'tcs_subprograms', 'tcs_program_summary', 'tcs_subfunction_summary']);
+    const identifier = name => { assert.match(name, /^[a-z_]+$/); return `"${name}"`; };
+    return {
+        async rpc(name, args) {
+            assert.equal(name, 'tcs_add_subprogram_equal_weights');
+            try {
+                const { rows } = await db.query('select public.tcs_add_subprogram_equal_weights($1, $2) as result', [args.p_program_id, args.p_name]);
+                return { data: rows[0].result, error: null };
+            } catch (error) { return { data: null, error: { message: error.message } }; }
+        },
+        from(table) {
+        assert.ok(tables.has(table));
+        const query = {
+            kind: 'select', columns: '*', record: null, id: null, sorting: 'id', start: 0, limit: null, singleRow: false,
+            select(columns = '*') { this.columns = columns; return this; },
+            order(column) { this.sorting = column; return this; },
+            range(start, end) { this.start = start; this.limit = end - start + 1; return this; },
+            insert(record) { this.kind = 'insert'; this.record = record; return this; },
+            update(record) { this.kind = 'update'; this.record = record; return this; },
+            delete() { this.kind = 'delete'; return this; },
+            eq(column, id) { assert.equal(column, 'id'); this.id = id; return this; },
+            single() { this.singleRow = true; return this; },
+            async execute() {
+                const name = `public.${identifier(table)}`;
+                const columns = this.columns === '*' ? '*' : identifier(this.columns);
+                let sql, values = [];
+                if (this.kind === 'select') sql = `select ${columns} from ${name} order by ${identifier(this.sorting)}${this.limit == null ? '' : ` limit ${this.limit} offset ${this.start}`}`;
+                if (this.kind === 'insert') {
+                    const keys = Object.keys(this.record);
+                    values = Object.values(this.record);
+                    sql = `insert into ${name} (${keys.map(identifier).join(',')}) values (${keys.map((_, i) => '$' + (i + 1)).join(',')}) returning ${columns}`;
+                }
+                if (this.kind === 'update') {
+                    const keys = Object.keys(this.record);
+                    values = [...Object.values(this.record), this.id];
+                    sql = `update ${name} set ${keys.map((k, i) => `${identifier(k)}=$${i + 1}`).join(',')} where id=$${values.length} returning ${columns}`;
+                }
+                if (this.kind === 'delete') { values = [this.id]; sql = `delete from ${name} where id=$1 returning ${columns}`; }
+                try {
+                    const { rows } = await db.query(sql, values);
+                    for (const row of rows) if (row.target_date instanceof Date) row.target_date = row.target_date.toISOString().slice(0, 10);
+                    if (this.singleRow && rows.length !== 1) return { data: null, error: { message: 'Record tidak ditemukan.' } };
+                    return { data: this.singleRow ? rows[0] : rows, error: null };
+                } catch (error) { return { data: null, error: { message: error.message } }; }
+            },
+            then(resolve, reject) { return this.execute().then(resolve, reject); }
+        };
+        return query;
+    } };
+}
+
+async function fixture(t, wrapStore = store => store) {
+    const db = new PGlite();
+    await db.exec('create role anon nologin; create role authenticated nologin;');
+    await db.exec(schema);
+    await db.exec(autoWeights);
+    const dom = new JSDOM(html, { url: 'http://127.0.0.1:5500/' });
+    const document = dom.window.document;
+    // Previous local data must not leak into the shared dashboard, or be cleared.
+    dom.window.localStorage.setItem('pm-dash-v3', '[{"n":"Data browser lama","subs":[]}]');
+    await db.exec('set role anon;');
+    const store = createDashboardStore(databaseClient(db));
+    const errors = [];
+    const app = mountDashboard({ document, getStore: async () => wrapStore(store), confirm: () => true, matchMedia: () => ({ matches: false }), notifyError: text => errors.push(text) });
+    t.after(async () => { dom.window.close(); await db.close(); });
+    await app.start();
+    const click = async selector => { const target = document.querySelector(selector); assert.ok(target, selector); await document.getElementById('rows').onclick({ target }); };
+    const edit = async (j, field, value) => {
+        const selector = j == null ? `[data-i="0"][data-k="${field}"]:not([data-j])` : `[data-i="0"][data-j="${j}"][data-k="${field}"]`;
+        const target = document.querySelector(selector);
+        assert.ok(target, selector);
+        target.value = value;
+        await document.getElementById('rows').onchange({ target });
+    };
+    const addProgram = async (name = 'Program uji') => {
+        document.getElementById('nName').value = name;
+        document.getElementById('nArea').value = 'Terminal Standardization';
+        document.getElementById('nDate').value = '2026-12-31';
+        await document.getElementById('addBtn').onclick();
+    };
+    const addSub = async name => { document.querySelector('[data-ni="0"]').value = name; await click('[data-as="0"]'); };
+    return { db, dom, document, store, app, click, edit, addProgram, addSub, errors };
+}
+
+test('startup reads shared database, leaves old browser data untouched, and exposes four empty charts', async t => {
+    const f = await fixture(t);
+    assert.equal(f.document.getElementById('connection'), null);
+    assert.equal(f.errors.length, 0);
+    assert.equal(f.document.querySelectorAll('.subfunction-chart').length, 4);
+    assert.equal((await f.store.load()).programs.length, 0);
+    assert.equal(f.document.getElementById('empty').hidden, false);
+    assert.match(f.dom.window.localStorage.getItem('pm-dash-v3'), /Data browser lama/);
+    assert.equal(f.document.getElementById('reset'), null);
+    assert.equal(f.document.getElementById('refresh'), null);
+    assert.equal(f.app.reload, undefined);
+});
+
+test('UI creates program/subprograms and derives progress, validation and charts from PostgreSQL', async t => {
+    const f = await fixture(t);
+    await f.addProgram();
+    await f.addSub('Evaluasi');
+    await f.addSub('Rilis');
+    await f.edit(0, 'w', '40');
+    assert.match(f.document.getElementById('rows').textContent, /Total weight must be 100%/);
+    await f.edit(0, 'w', '50');
+    await f.edit(1, 'w', '50');
+    await f.edit(0, 's', 'finish');
+    const snapshot = await f.store.load();
+    assert.equal(snapshot.programs[0].status, 'ongoing');
+    assert.equal(Number(snapshot.programs[0].progress), 50);
+    assert.match(f.document.getElementById('rows').textContent, /50%/);
+    assert.match(f.document.getElementById('chart').textContent, /Finish: 1/);
+    await f.edit(1, 's', 'finish');
+    assert.equal(Number((await f.store.load()).programs[0].progress), 100);
+    assert.equal(f.document.querySelectorAll('[data-k="p"]').length, 0);
+});
+
+test('edits use database UUIDs and persist subfunctions, dates, names and notes', async t => {
+    const f = await fixture(t);
+    await f.addProgram(); await f.addSub('Tahap');
+    await f.edit(0, 'a', 'Channel Standardization');
+    await f.edit(0, 'd', '2026-10-31');
+    await f.edit(0, 'n', 'Tahap baru');
+    await f.edit(0, 't', 'Catatan <script>alert(1)</script>');
+    await f.edit(null, 't', 'Catatan program');
+    await f.app.start();
+    const rows = await f.store.load();
+    assert.equal(rows.programs[0].subprograms[0].subfunction_id, 2);
+    assert.equal(rows.programs[0].subprograms[0].name, 'Tahap baru');
+    assert.equal(rows.programs[0].notes, 'Catatan program');
+    assert.equal(rows.charts.find(c => c.subfunction_id === 2).total_subprograms, 1);
+    assert.equal(f.document.querySelector('#rows script'), null);
+});
+
+test('closing/opening details does not write business data and survives a reload in the same tab', async t => {
+    const f = await fixture(t); await f.addProgram(); await f.addSub('Tahap');
+    const before = (await f.store.load()).programs[0].updated_at;
+    await f.click('[data-close="0"]');
+    assert.equal(f.document.querySelector('[data-close="0"]'), null);
+    await f.app.start();
+    assert.equal(f.document.querySelector('[data-close="0"]'), null);
+    assert.equal(String((await f.store.load()).programs[0].updated_at), String(before));
+    await f.click('[data-tg="0"]');
+    assert.ok(f.document.querySelector('[data-close="0"]'));
+});
+
+test('deleting subprograms/programs removes them from the database and diagram', async t => {
+    const f = await fixture(t); await f.addProgram(); await f.addSub('Satu'); await f.addSub('Dua');
+    await f.click('[data-ds="0.0"]');
+    assert.equal((await f.store.load()).programs[0].subprograms.length, 1);
+    await f.click('[data-del="0"]');
+    const remaining = await f.store.load();
+    assert.equal(remaining.programs.length, 0);
+    assert.ok(remaining.charts.every(c => c.total_subprograms === 0));
+    assert.doesNotMatch(f.document.getElementById('chart').innerHTML, /NaN|Infinity/);
+});
+
+test('failed writes display an error, retain the draft, and never claim data is saved', async t => {
+    const f = await fixture(t, store => ({ ...store, createProgram: async () => { throw new Error('Network unavailable'); } }));
+    await f.addProgram('Belum tersimpan');
+    assert.equal((await f.store.load()).programs.length, 0);
+    assert.equal(f.document.getElementById('nName').value, 'Belum tersimpan');
+    assert.match(f.errors.at(-1), /Changes have not been saved/);
+});
+
+test('a committed write followed by a failed refresh is recoverable without creating duplicates', async t => {
+    let calls = 0;
+    const f = await fixture(t, store => ({ ...store, load: async () => { if (++calls === 2) throw new Error('Load failed'); return store.load(); } }));
+    await f.addProgram('Sudah tersimpan');
+    assert.equal((await f.store.load()).programs.length, 1);
+    assert.match(f.errors.at(-1), /Changes saved/);
+    assert.equal(f.document.getElementById('addBtn').disabled, true);
+    await f.app.start();
+    assert.equal((await f.store.load()).programs.length, 1);
+    assert.equal(f.document.getElementById('addBtn').disabled, false);
+});
+
+test('failed startup blocks writes and allows a retry', async t => {
+    let first = true;
+    const f = await fixture(t, store => ({ ...store, load: async () => { if (first) { first = false; throw new Error('Offline'); } return store.load(); } }));
+    assert.equal(f.document.getElementById('addBtn').disabled, true);
+    assert.match(f.errors.at(-1), /Unable to load data/);
+    await f.app.start();
+    assert.equal(f.document.getElementById('addBtn').disabled, false);
+});
+
+test('SQL verification passes and rerunning schema retains program records', async t => {
+    const f = await fixture(t); await f.addProgram('Tetap ada');
+    await f.db.exec('reset role;');
+    await f.db.exec(schema);
+    const result = await f.db.exec(fs.readFileSync(path.join(root, 'supabase/checks.sql'), 'utf8'));
+    assert.match(result.flatMap(r => r.rows || [])[0].result, /PASS/);
+    assert.equal((await f.store.load()).programs[0].name, 'Tetap ada');
+});
+
+test('adapter reads all pages rather than truncating more than 1,000 records', async () => {
+    const rows = Array.from({ length: 1001 }, (_, i) => ({ id: String(i).padStart(5, '0'), sort_order: i, subprograms: [] }));
+    const requests = [];
+    const store = createDashboardStore({ from(table) { return {
+        select() { return this; }, order() { return this; },
+        async range(start, end) { requests.push([table, start]); return { data: table === 'tcs_program_summary' ? rows.slice(start, end + 1) : [], error: null }; }
+    }; } });
+    assert.equal((await store.load()).programs.length, 1001);
+    assert.ok(requests.some(([table, start]) => table === 'tcs_program_summary' && start === 1000));
+});
+
+test('adding subprograms divides all weights equally with exact 100 percent totals', async t => {
+    const f = await fixture(t); await f.addProgram();
+    const expected = [[100], [50, 50], [33, 33, 34], [25, 25, 25, 25], [20, 20, 20, 20, 20], [16, 16, 17, 17, 17, 17]];
+    for (let i = 0; i < expected.length; i++) {
+        await f.addSub(`Tahap ${i + 1}`);
+        const program = (await f.store.load()).programs[0];
+        assert.deepEqual(program.subprograms.map(u => Number(u.weight)), expected[i]);
+        assert.equal(Number(program.weight_total), 100);
+        assert.equal(program.weight_valid, true);
+        assert.ok(program.subprograms.every(u => Number.isInteger(Number(u.weight))));
+    }
+});
+
+test('rebalance replaces manual weights but preserves existing status, date, note and ID', async t => {
+    const f = await fixture(t); await f.addProgram(); await f.addSub('Satu');
+    await f.edit(0, 's', 'finish');
+    await f.edit(0, 'd', '2026-12-01');
+    await f.edit(0, 't', 'Tetap disimpan');
+    await f.edit(0, 'w', '80');
+    const original = (await f.store.load()).programs[0].subprograms[0];
+    await f.addSub('Dua');
+    const program = (await f.store.load()).programs[0];
+    assert.equal(program.subprograms[0].id, original.id);
+    assert.equal(program.subprograms[0].status, 'finish');
+    assert.equal(program.subprograms[0].notes, 'Tetap disimpan');
+    assert.equal(program.subprograms[0].target_date, original.target_date);
+    assert.deepEqual(program.subprograms.map(u => Number(u.weight)), [50, 50]);
+    assert.equal(Number(program.progress), 50);
+    assert.equal(program.status, 'ongoing');
+});
+
+test('a failure while redistributing weights rolls back the newly inserted child too', async t => {
+    const f = await fixture(t); await f.addProgram(); await f.addSub('Satu');
+    await f.db.exec(`reset role;
+        create function public.tcs_test_fail_weight() returns trigger language plpgsql as $$ begin raise exception 'Simulated rebalance failure'; end; $$;
+        create trigger tcs_test_fail_weight before update of weight on public.tcs_subprograms for each row execute function public.tcs_test_fail_weight();
+        set role anon;`);
+    await f.addSub('Tidak boleh tersimpan');
+    const program = (await f.store.load()).programs[0];
+    assert.equal(program.subprograms.length, 1);
+    assert.equal(Number(program.subprograms[0].weight), 100);
+    assert.match(f.errors.at(-1), /Changes have not been saved/);
+});
+
+test('upgrade converts decimal weights to whole numbers while keeping a valid total and existing data', async t => {
+    const f = await fixture(t); await f.addProgram();
+    await f.addSub('Satu'); await f.addSub('Dua'); await f.addSub('Tiga');
+    await f.edit(0, 't', 'Jangan dihapus');
+    await f.db.exec(`reset role;
+        alter table public.tcs_subprograms drop constraint tcs_subprograms_integer_weight;
+        update public.tcs_subprograms set weight = case sort_order when 2 then 33.34 else 33.33 end;`);
+    await f.db.exec(autoWeights);
+    await f.db.exec(autoWeights);
+    await f.db.exec('set role anon;');
+    const program = (await f.store.load()).programs[0];
+    assert.deepEqual(program.subprograms.map(u => Number(u.weight)), [33, 33, 34]);
+    assert.equal(Number(program.weight_total), 100);
+    assert.equal(program.subprograms[0].notes, 'Jangan dihapus');
+    await assert.rejects(f.store.updateSubprogram(program.subprograms[0].id, { weight: 33.5 }), /integer_weight/);
+});
+
+test('overdue unfinished programs show a red progress bar and percentage while status and edits remain unchanged', async t => {
+    const f = await fixture(t); await f.addProgram(); await f.addSub('Satu'); await f.addSub('Dua');
+    await f.edit(0, 's', 'finish');
+    await f.edit(null, 'd', '2000-01-01');
+    let progress = f.document.querySelector('.prog');
+    assert.equal(progress.style.getPropertyValue('--c'), 'var(--bad)');
+    assert.equal(progress.style.color, 'var(--bad)');
+    assert.equal(progress.querySelector('.pct').textContent, '50%');
+    assert.equal(f.document.querySelector('#rows .pill').textContent, 'On Going');
+    assert.equal(f.document.querySelector('[data-i="0"][data-k="t"]:not([data-j])').disabled, false);
+
+    await f.edit(null, 'd', '2099-01-01');
+    assert.equal(f.document.querySelector('.prog').style.getPropertyValue('--c'), 'var(--warn)');
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    await f.edit(null, 'd', today);
+    assert.equal(f.document.querySelector('.prog').style.getPropertyValue('--c'), 'var(--warn)');
+
+    await f.edit(null, 'd', '2000-01-01');
+    await f.edit(1, 's', 'finish');
+    progress = f.document.querySelector('.prog');
+    assert.equal(progress.style.getPropertyValue('--c'), 'var(--ok)');
+    assert.equal(progress.querySelector('.pct').textContent, '100%');
+});
+
+test('overdue subprogram targets turn red independently of the program target and status', async t => {
+    const f = await fixture(t); await f.addProgram(); await f.addSub('Satu'); await f.addSub('Dua');
+    await f.edit(null, 'd', '2099-01-01');
+    const target = () => f.document.querySelector('[data-j="0"][data-k="d"]');
+    const checkTarget = overdue => {
+        assert.equal(target().style.color, overdue ? 'var(--bad)' : '');
+        assert.equal(target().closest('td').querySelector('small')?.textContent ?? '', overdue ? 'Target date passed' : '');
+        assert.equal(target().disabled, false);
+    };
+    await f.edit(0, 'd', '2000-01-01');
+    checkTarget(true);
+    assert.equal(f.document.querySelector('[data-j="1"][data-k="d"]').style.color, '');
+    assert.equal(f.document.querySelector('.prog').style.getPropertyValue('--c'), 'var(--hold)');
+    await f.edit(0, 's', 'ongoing'); checkTarget(true);
+    await f.edit(0, 's', 'finish'); checkTarget(true);
+    await f.edit(0, 's', 'initiate'); checkTarget(true);
+
+    await f.edit(0, 'd', '2099-01-01'); checkTarget(false);
+    const d = new Date();
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    await f.edit(0, 'd', today); checkTarget(false);
+    await f.edit(0, 'd', ''); checkTarget(false);
+    await f.edit(null, 'd', '2000-01-01'); checkTarget(false);
+    assert.deepEqual(f.errors, []);
+});

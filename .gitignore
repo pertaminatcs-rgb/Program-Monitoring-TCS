@@ -1,0 +1,19 @@
+# Local dependencies and environment files
+node_modules/
+.env
+.env.*
+!.env.example
+
+# Generated deployment package and local visual previews
+/deploy/tcsmonitor-site.zip
+/previews/
+
+# Logs and local caches
+*.log
+__pycache__/
+*.pyc
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
