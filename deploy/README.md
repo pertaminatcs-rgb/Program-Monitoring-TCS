@@ -1,6 +1,8 @@
 # Hosting TCS di Hostinger VPS — Ubuntu 24.04 LTS
 
-Panduan ini untuk VPS Ubuntu 24.04 biasa dengan Nginx. Domain contoh adalah `tcsmonitor.online`. Belum ada perubahan yang dilakukan pada VPS atau DNS oleh Codex.
+Panduan ini untuk VPS Hostinger Ubuntu 24.04 LTS dengan Nginx, domain `tcsmonitor.online`, dan IP publik `187.77.127.18`.
+
+Status pemasangan pada 13 Oktober 2026: Nginx sudah berjalan, lima file dashboard sudah terpasang di `/var/www/tcsmonitor`, dan akses HTTP melalui IP sudah terverifikasi. Pengaktifan HTTPS menunggu record DNS domain diarahkan ke IP VPS. Pembaruan DNS belum dilakukan oleh Codex.
 
 Website terdiri dari HTML dan JavaScript. Nginx menyajikan file website, lalu browser terhubung langsung ke Supabase. Tidak perlu memasang Node.js, PM2, atau database PostgreSQL pada VPS untuk menjalankan website ini.
 
@@ -8,7 +10,7 @@ Website terdiri dari HTML dan JavaScript. Nginx menyajikan file website, lalu br
 
 Aktifkan VPS, pilih Ubuntu 24.04 LTS, lalu buka pengelolaan VPS di hPanel. Catat IP publik IPv4, username SSH, dan port SSH dari detail aksesnya. Gunakan detail yang benar dari panel; jangan mengirim password VPS melalui chat.
 
-IP di bawah ditulis `IP_VPS` sebagai placeholder. Ganti dengan IP yang ditampilkan Hostinger. Jika username atau port bukan root/22, sesuaikan perintah.
+Detail yang diberikan melalui panel VPS: IP `187.77.127.18` dan username `root`. Jika IP atau port berubah, sesuaikan perintah berikut dengan detail terbaru di panel.
 
 ## 2. Arahkan domain
 
@@ -16,7 +18,7 @@ Pada panel DNS yang mengelola domain:
 
 | Tipe | Nama | Nilai |
 | --- | --- | --- |
-| A | `@` | IPv4 VPS |
+| A | `@` | `187.77.127.18` |
 | CNAME | `www` | `tcsmonitor.online` |
 
 Ganti record A untuk nama yang sama jika sebelumnya menunjuk server lain. Record AAAA untuk domain ini perlu menunjuk IPv6 VPS yang benar; jika tidak memakai IPv6, jangan biarkan record AAAA mengarah ke server lama. Tunggu perubahan DNS sampai domain mengarah ke VPS.
@@ -26,9 +28,9 @@ Ganti record A untuk nama yang sama jika sebelumnya menunjuk server lain. Record
 Paket `tcsmonitor-site.zip` berisi lima file website dengan struktur yang benar. Jalankan perintah berikut dari PowerShell di folder proyek:
 
 ```powershell
-scp .\deploy\tcsmonitor-site.zip root@IP_VPS:/tmp/tcsmonitor-site.zip
-scp .\deploy\nginx-tcsmonitor.conf root@IP_VPS:/tmp/nginx-tcsmonitor.conf
-ssh root@IP_VPS
+scp .\deploy\tcsmonitor-site.zip root@187.77.127.18:/tmp/tcsmonitor-site.zip
+scp .\deploy\nginx-tcsmonitor.conf root@187.77.127.18:/tmp/nginx-tcsmonitor.conf
+ssh root@187.77.127.18
 ```
 
 Untuk port SSH yang berbeda, gunakan `scp -P PORT` dan `ssh -p PORT`. Gunakan username sesuai akses VPS.
@@ -77,7 +79,7 @@ curl -I -H 'Host: tcsmonitor.online' http://127.0.0.1/supabase/store.mjs
 
 Halaman dan module harus memberi HTTP 200. Module `.mjs` harus memiliki `Content-Type: application/javascript`. Tanpa tipe ini, browser bisa menolak module dan dashboard tidak terhubung. URL file SQL atau tests harus memberi 404.
 
-Buka `http://tcsmonitor.online` setelah DNS mengarah ke VPS. IP VPS tanpa nama domain mungkin tetap menampilkan halaman default Nginx, karena konfigurasi ini memilih website berdasarkan hostname domain.
+Buka `http://tcsmonitor.online` setelah DNS mengarah ke VPS. Sebelum DNS siap dan HTTPS diaktifkan, dashboard juga dapat diperiksa melalui `http://187.77.127.18` karena konfigurasi awal mengenali IP tersebut.
 
 ## 5. Aktifkan HTTPS
 
@@ -99,15 +101,31 @@ Ikuti pertanyaan Certbot untuk email dan persetujuan sertifikat. Certbot memperb
 3. Masukkan data program yang memang ingin disimpan, lalu refresh; data harus tetap muncul.
 4. Buka dari perangkat/browser lain; data yang sama harus terbaca dari Supabase.
 
-Database Supabase saat penyambungan masih kosong. Data lama dari localStorage belum dimigrasikan dan tidak otomatis dimasukkan ke database.
+Website yang dihosting membaca data dari project Supabase yang sama dengan versi lokal. Data yang sudah disimpan di Supabase akan muncul setelah halaman dimuat. Data lama yang hanya tersimpan di localStorage tidak dipindahkan secara otomatis.
 
 ## Memperbarui website
 
-Paket ZIP merupakan salinan kode saat dibuat. Setelah mengedit kode, buat ulang paket dengan script berikut, lalu upload dan ekstrak ulang seperti langkah 3–4:
+Paket ZIP merupakan salinan kode saat dibuat. Setelah mengedit kode, buat ulang paket dengan script berikut:
 
 ```powershell
 python .\deploy\package_site.py
 ```
+
+Unggah hanya paket website dari PowerShell:
+
+```powershell
+scp .\deploy\tcsmonitor-site.zip root@187.77.127.18:/tmp/tcsmonitor-site.zip
+```
+
+Ekstrak paket melalui terminal VPS:
+
+```bash
+sudo unzip -o /tmp/tcsmonitor-site.zip -d /var/www/tcsmonitor
+sudo find /var/www/tcsmonitor -type d -exec chmod 755 {} \;
+sudo find /var/www/tcsmonitor -type f -exec chmod 644 {} \;
+```
+
+Pertahankan konfigurasi Nginx yang sudah diperbarui Certbot untuk HTTPS. Berkas `nginx-tcsmonitor.conf` di proyek adalah konfigurasi HTTP untuk pemasangan awal; memasangnya kembali akan menggantikan konfigurasi HTTPS. Perubahan file HTML/JavaScript tidak memerlukan reload Nginx.
 
 Tidak perlu menjalankan SQL schema ulang setiap mengubah tampilan website.
 
