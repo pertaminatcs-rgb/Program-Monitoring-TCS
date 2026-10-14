@@ -1,9 +1,9 @@
-"""Package only the five public website files for static VPS hosting."""
+"""Package the public website files for static VPS hosting."""
 from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 
 project = Path(__file__).resolve().parent.parent
-files = ["index.html", "app.mjs", "dashboard.mjs", "supabase/config.mjs", "supabase/store.mjs"]
+files = ["index.html", "favicon.png", "app.mjs", "dashboard.mjs", "supabase/config.mjs", "supabase/store.mjs"]
 for name in files:
     if not (project / name).is_file():
         raise SystemExit(f"Missing website file: {name}")
