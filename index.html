@@ -12,6 +12,7 @@
         rel="stylesheet">
     <style>
         :root {
+            color-scheme: light;
             --bg: #e8ecef;
             --panel: #fff;
             --ink: #14283a;
@@ -29,6 +30,7 @@
 
         @media (prefers-color-scheme:dark) {
             :root:not([data-theme="light"]) {
+                color-scheme: dark;
                 --bg: #101a22;
                 --panel: #18252f;
                 --ink: #e6edf2;
@@ -43,6 +45,7 @@
         }
 
         :root[data-theme="dark"] {
+            color-scheme: dark;
             --bg: #101a22;
             --panel: #18252f;
             --ink: #e6edf2;
@@ -100,6 +103,17 @@
         input {
             font: inherit;
             color: var(--ink)
+        }
+
+        select option,
+        select optgroup {
+            color: var(--ink);
+            background-color: var(--panel)
+        }
+
+        input::placeholder {
+            color: var(--mute);
+            opacity: 1
         }
 
         button {

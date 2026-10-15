@@ -1,7 +1,8 @@
 export function mountDashboard({ document, getStore, confirm = globalThis.confirm, matchMedia = globalThis.matchMedia, notifyError = text => globalThis.alert(text) }) {
     const ST = { initiate: ["Initiate", "var(--hold)"], ongoing: ["On Going", "var(--warn)"], finish: ["Finish", "var(--ok)"] };
     const statusKey = s => ({ ok: "ongoing", warn: "ongoing", bad: "ongoing", notyet: "initiate", hold: "initiate", done: "finish" })[s] || (Object.hasOwn(ST, s) ? s : "initiate");
-    const SUBFUNCTIONS = ["Terminal Standardization", "Channel Standardization", "Terminal Code & Standardization", "Procedure & Compliance"];
+    const SUBFUNCTIONS = ["Terminal Standardization", "Channel Standardization", "Terminal Code & Standar", "Procedure & Compliance"];
+    const subfunctionName = name => name === "Terminal Code & Standardization" ? SUBFUNCTIONS[2] : name;
     const day = n => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}` };
     const percent = v => Math.round(Math.max(0, Math.min(100, Number(v) || 0)));
     let data = [], filter = "all", store = null, busy = false, loaded = false;
@@ -14,17 +15,17 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
         $("rows").setAttribute('aria-busy', String(busy));
     }
     function acceptSnapshot(snapshot) {
-        const names = new Map(snapshot.subfunctions.map(f => [f.id, f.name]));
+        const names = new Map(snapshot.subfunctions.map(f => [f.id, subfunctionName(f.name)]));
         references.clear();
-        snapshot.subfunctions.forEach(f => references.set(f.name, f.id));
+        snapshot.subfunctions.forEach(f => references.set(subfunctionName(f.name), f.id));
         data = snapshot.programs.map(row => ({
-            id: row.id, n: row.name, a: names.get(row.subfunction_id) || row.legacy_subfunction || "",
+            id: row.id, n: row.name, a: subfunctionName(names.get(row.subfunction_id) || row.legacy_subfunction || ""),
             d: row.target_date || "", t: row.notes || "", order: row.sort_order,
             open: openState.get(row.id) || false,
             summary: { s: statusKey(row.status), p: row.progress == null ? null : Number(row.progress), weight: Number(row.weight_total), valid: row.weight_valid === true },
-            subs: row.subprograms.map(u => ({ id: u.id, n: u.name, a: names.get(u.subfunction_id) || u.legacy_subfunction || "", w: Number(u.weight), s: statusKey(u.status), d: u.target_date || "", t: u.notes || "", order: u.sort_order }))
+            subs: row.subprograms.map(u => ({ id: u.id, n: u.name, a: subfunctionName(names.get(u.subfunction_id) || u.legacy_subfunction || ""), w: Number(u.weight), s: statusKey(u.status), d: u.target_date || "", t: u.notes || "", order: u.sort_order }))
         }));
-        const charts = new Map(snapshot.charts.map(c => [c.subfunction_name, c]));
+        const charts = new Map(snapshot.charts.map(c => [subfunctionName(c.subfunction_name), c]));
         chartSnapshot = { unassigned: snapshot.unmappedSubprograms, groups: SUBFUNCTIONS.map(a => {
             const row = charts.get(a);
             return { a, total: Number(row?.total_subprograms || 0), counts: { initiate: Number(row?.initiate_count || 0), ongoing: Number(row?.ongoing_count || 0), finish: Number(row?.finish_count || 0) } };

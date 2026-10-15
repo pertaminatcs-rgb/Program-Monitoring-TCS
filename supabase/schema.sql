@@ -12,7 +12,7 @@ create table if not exists public.tcs_subfunctions (
 insert into public.tcs_subfunctions (id, name) values
     (1, 'Terminal Standardization'),
     (2, 'Channel Standardization'),
-    (3, 'Terminal Code & Standardization'),
+    (3, 'Terminal Code & Standar'),
     (4, 'Procedure & Compliance')
 on conflict (id) do update set name = excluded.name;
 

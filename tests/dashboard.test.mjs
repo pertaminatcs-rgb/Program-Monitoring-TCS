@@ -153,6 +153,44 @@ test('edits use database UUIDs and persist subfunctions, dates, names and notes'
     assert.equal(f.document.querySelector('#rows script'), null);
 });
 
+test('renamed subfunction keeps legacy database references, records, filters and chart counts working', async t => {
+    const f = await fixture(t);
+    const label = 'Terminal Code & Standar';
+    await f.db.exec("reset role; update public.tcs_subfunctions set name = 'Terminal Code & Standardization' where id = 3; set role anon;");
+    await f.app.start();
+    await f.addProgram();
+    await f.edit(null, 'a', label);
+    await f.addSub('Tahap evaluasi');
+    await f.edit(0, 't', 'Keterangan tetap tersimpan');
+    await f.edit(0, 's', 'finish');
+    const before = (await f.store.load()).programs[0];
+    assert.equal(before.subfunction_id, 3);
+    assert.equal(before.subprograms[0].subfunction_id, 3);
+
+    const checkDisplay = () => {
+        assert.equal(f.document.querySelector('[data-i="0"][data-k="a"]:not([data-j])').value, label);
+        assert.equal(f.document.querySelector('[data-j="0"][data-k="a"]').value, label);
+        const chart = [...f.document.querySelectorAll('.subfunction-chart')].find(c => c.querySelector('h3').textContent === label);
+        assert.equal(chart.querySelector('.chart-count').textContent, '1');
+        assert.match(chart.textContent, /Finish: 1/);
+        assert.doesNotMatch(f.document.body.textContent, /Terminal Code & Standardization/);
+        f.document.getElementById('area').value = label;
+        f.document.getElementById('area').onchange();
+        assert.equal(f.document.getElementById('empty').hidden, true);
+    };
+    checkDisplay();
+
+    await f.db.exec("reset role; update public.tcs_subfunctions set name = 'Terminal Code & Standar' where id = 3; set role anon;");
+    await f.app.start();
+    checkDisplay();
+    const after = (await f.store.load()).programs[0];
+    assert.equal(after.id, before.id);
+    assert.equal(after.subprograms[0].id, before.subprograms[0].id);
+    assert.equal(after.subprograms[0].notes, 'Keterangan tetap tersimpan');
+    assert.equal(Number(after.progress), 100);
+    assert.deepEqual(f.errors, []);
+});
+
 test('closing/opening details does not write business data and survives a reload in the same tab', async t => {
     const f = await fixture(t); await f.addProgram(); await f.addSub('Tahap');
     const before = (await f.store.load()).programs[0].updated_at;
