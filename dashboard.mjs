@@ -240,7 +240,7 @@ export function mountLogin({ document, dashboard, getAuth }) {
     function apply(next) {
         access = next;
         dashboard.setCanEdit(next.canEdit);
-        button.textContent = next.user ? "Logout" : "Login";
+        button.textContent = next.user ? "Sign Out" : "Sign In";
         $("accessMode").textContent = next.canEdit ? "Editor" : "View only";
     }
     function setWorking(value) {

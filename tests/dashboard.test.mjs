@@ -532,10 +532,10 @@ test('login UI handles invalid login, approved login, logout and expired session
     await submit('test-password');
     assert.equal(dialog.open, false);
     assert.ok(f.document.querySelector('.program-name'));
-    assert.equal(f.document.getElementById('login').textContent, 'Logout');
+    assert.equal(f.document.getElementById('login').textContent, 'Sign Out');
     await f.document.getElementById('login').onclick();
     assert.equal(f.document.querySelector('.program-name'), null);
-    assert.equal(f.document.getElementById('login').textContent, 'Login');
+    assert.equal(f.document.getElementById('login').textContent, 'Sign In');
     await f.document.getElementById('login').onclick(); await submit('test-password');
     current = { user: null, canEdit: false }; listener('SIGNED_OUT');
     assert.equal(f.document.querySelector('.program-name'), null);
@@ -587,5 +587,5 @@ test('a stale access check cannot restore editor controls after a signed-out eve
     resolveAccess({ user: { id: editorId }, canEdit: true });
     await first;
     assert.equal(canEdit, false);
-    assert.equal(dom.window.document.getElementById('login').textContent, 'Login');
+    assert.equal(dom.window.document.getElementById('login').textContent, 'Sign In');
 });
