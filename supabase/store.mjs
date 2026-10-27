@@ -59,3 +59,30 @@ export function createDashboardStore(client) {
         deleteSubprogram: id => remove('tcs_subprograms', id)
     };
 }
+
+export function createDashboardAuth(client) {
+    return {
+        async getAccess() {
+            const { data, error } = await client.auth.getSession();
+            if (error) throw error;
+            if (!data.session) return { user: null, canEdit: false };
+            const { data: identity, error: identityError } = await client.auth.getUser();
+            if (identityError || !identity.user) throw new Error('Your session has expired. Please log in again.');
+            const { data: allowed, error: accessError } = await client.rpc('tcs_can_edit');
+            if (accessError) throw new Error('Editor access could not be verified. Please contact the dashboard administrator.');
+            return { user: identity.user, canEdit: allowed === true };
+        },
+        async signIn(email, password) {
+            const { error } = await client.auth.signInWithPassword({ email, password });
+            if (error) throw new Error('Login failed. Check your email and password, then try again.');
+        },
+        async signOut() {
+            const { error } = await client.auth.signOut({ scope: 'local' });
+            if (error) throw new Error('Unable to log out. Please try again.');
+        },
+        onChange(callback) {
+            const { data } = client.auth.onAuthStateChange(callback);
+            return () => data.subscription.unsubscribe();
+        }
+    };
+}

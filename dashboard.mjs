@@ -1,4 +1,4 @@
-export function mountDashboard({ document, getStore, confirm = globalThis.confirm, matchMedia = globalThis.matchMedia, notifyError = text => globalThis.alert(text) }) {
+export function mountDashboard({ document, getStore, canEdit = false, confirm = globalThis.confirm, matchMedia = globalThis.matchMedia, notifyError = text => globalThis.alert(text) }) {
     const ST = { initiate: ["Initiate", "var(--hold)"], ongoing: ["On Going", "var(--warn)"], finish: ["Finish", "var(--ok)"] };
     const statusKey = s => ({ ok: "ongoing", warn: "ongoing", bad: "ongoing", notyet: "initiate", hold: "initiate", done: "finish" })[s] || (Object.hasOwn(ST, s) ? s : "initiate");
     const SUBFUNCTIONS = ["Terminal Standardization", "Channel Standardization", "Terminal Code & Standar", "Procedure & Compliance"];
@@ -11,7 +11,9 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
     const references = new Map();
     const $ = id => document.getElementById(id);
     function syncControls() {
-        document.querySelectorAll('#rows input, #rows textarea, #rows select, #rows button, .add input, .add select, #addBtn, #exp').forEach(control => control.disabled = busy || !loaded);
+        document.querySelectorAll('#rows input, #rows textarea, #rows select, .add input, .add select, #addBtn').forEach(control => control.disabled = busy || !loaded || !canEdit);
+        document.querySelectorAll('#rows button, #exp').forEach(control => control.disabled = busy || !loaded);
+        document.querySelector('.add').hidden = !canEdit;
         $("rows").setAttribute('aria-busy', String(busy));
     }
     function acceptSnapshot(snapshot) {
@@ -48,7 +50,7 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
         } finally { busy = false; syncControls() }
     }
     async function mutate(action, afterSave) {
-        if (busy || !loaded) return false;
+        if (busy || !loaded || !canEdit) return false;
         busy = true;
         syncControls();
         let committed = false;
@@ -95,7 +97,13 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
         }).join("");
         $("chart").innerHTML = `<h2>Subprogram Summary by Subfunction</h2><div class="sub">Subprogram totals and status distribution for each subfunction.</div><div class="subfunction-charts">${charts}</div>${unassigned ? `<div class="sub" style="margin-top:10px">${unassigned} subprogram${unassigned == 1 ? " has" : "s have"} not been assigned to a TCS subfunction.</div>` : ""}`;
     }
-    const field = (x, j, k, type, value, label, dateState = "") => `<input type="${type}" ${type == "number" ? 'min="0" max="100" step="1"' : ""} value="${esc(value ?? "")}" data-i="${x.i}" data-j="${j}" data-k="${k}" data-key="${x.i}.${j}.${k}" aria-label="${esc(label)} for ${esc(x.subs[j].n)}"${dateState ? ` style="color:var(--${dateState == "finish" ? "ok" : "bad"})"` : ""}>${dateState == "overdue" ? '<small style="color:var(--bad)">Target date passed</small>' : ""}`;
+    const dateLabel = value => value ? value.split('-').reverse().join('/') : '—';
+    const dateNotice = state => state == "overdue" ? '<small style="color:var(--bad)">Target date passed</small>' : "";
+    function field(x, j, k, type, value, label, dateState = "") {
+        const style = dateState ? ` style="color:var(--${dateState == "finish" ? "ok" : "bad"})"` : "";
+        if (!canEdit) return `<span${style}>${esc(type == "date" ? dateLabel(value) : value || (value === 0 ? 0 : '—'))}</span>${dateNotice(dateState)}`;
+        return `<input type="${type}" ${type == "number" ? 'min="0" max="100" step="1"' : ""} value="${esc(value ?? "")}" data-i="${x.i}" data-j="${j}" data-k="${k}" data-key="${x.i}.${j}.${k}" aria-label="${esc(label)} for ${esc(x.subs[j].n)}"${style}>${dateNotice(dateState)}`;
+    }
     function subtable(x) {
         const c = x.c;
         const warning = x.subs.length && !c.valid;
@@ -105,13 +113,13 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
         h += x.subs.map((u, j) => `<tr>
             <td>${field(x, j, "w", "number", u.w, "Weight")}</td>
             <td>${field(x, j, "n", "text", u.n, "Subprogram name")}</td>
-            <td><select data-i="${x.i}" data-j="${j}" data-k="a" data-key="${x.i}.${j}.a" aria-label="Subfunction for ${esc(u.n)}">${areaOpts(u.a)}</select></td>
-            <td><div class="pill" style="--c:${ST[statusKey(u.s)][1]}"><select data-i="${x.i}" data-j="${j}" data-k="s" data-key="${x.i}.${j}.s" aria-label="Status for ${esc(u.n)}">${stOpts(u.s)}</select></div></td>
+            <td>${canEdit ? `<select data-i="${x.i}" data-j="${j}" data-k="a" data-key="${x.i}.${j}.a" aria-label="Subfunction for ${esc(u.n)}">${areaOpts(u.a)}</select>` : esc(u.a || '—')}</td>
+            <td><div class="pill" style="--c:${ST[statusKey(u.s)][1]}">${canEdit ? `<select data-i="${x.i}" data-j="${j}" data-k="s" data-key="${x.i}.${j}.s" aria-label="Status for ${esc(u.n)}">${stOpts(u.s)}</select>` : ST[u.s][0]}</div></td>
             <td>${field(x, j, "d", "date", u.d, "Target date", u.d && u.d < day(0) ? (u.s == "finish" ? "finish" : "overdue") : "")}</td>
             <td>${field(x, j, "t", "text", u.t, "Remarks")}</td>
-            <td><button class="x" data-ds="${x.i}.${j}" aria-label="Delete ${esc(u.n)}">Delete</button></td>
+            <td>${canEdit ? `<button class="x" data-ds="${x.i}.${j}" aria-label="Delete ${esc(u.n)}">Delete</button>` : ""}</td>
         </tr>`).join("");
-        h += `</tbody></table></div><div style="padding:8px 0 0 34px;display:flex;flex-wrap:wrap;gap:8px;align-items:center"><input type="text" class="nw" data-ni="${x.i}" placeholder="New subprogram name" aria-label="New subprogram name" style="margin-left:0"> <button data-as="${x.i}">Add Subprogram</button> <button data-close="${x.i}" aria-label="Close subprograms for ${esc(x.n)}">Close Subprograms</button></div>`;
+        h += `</tbody></table></div><div style="padding:8px 0 0 34px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">${canEdit ? `<input type="text" class="nw" data-ni="${x.i}" placeholder="New subprogram name" aria-label="New subprogram name" style="margin-left:0"> <button data-as="${x.i}">Add Subprogram</button>` : ""} <button data-close="${x.i}" aria-label="Close subprograms for ${esc(x.n)}">Close Subprograms</button></div>`;
         return h;
     }
     function render() {
@@ -124,18 +132,18 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
         const q = $("q").value.toLowerCase(), ar = $("area").value, today = day(0);
         const list = D.filter(x => (filter == "all" || x.c.s == filter) && (!ar || (ar == "__unassigned" ? !SUBFUNCTIONS.includes(x.a) : x.a == ar)) && x.n.toLowerCase().includes(q));
         renderChart();
-        $("empty").textContent = data.length ? "No programs match your search or filter." : "No programs yet. Add a program to get started.";
+        $("empty").textContent = data.length ? "No programs match your search or filter." : canEdit ? "No programs yet. Add a program to get started." : "No programs available.";
         $("empty").hidden = !loaded || list.length > 0;
         $("rows").innerHTML = list.map(x => {
             const col = ST[x.c.s][1], od = x.d && x.d < today && x.c.s != "finish";
             const progressCol = od ? "var(--bad)" : col;
-            let h = `<tr><td><div class="nm"><button class="tg" data-tg="${x.i}" aria-expanded="${!!x.open}" aria-label="${x.open ? "Close" : "Show"} subprograms for ${esc(x.n)}">${x.open ? "-" : "+"}</button><div class="program-details"><textarea class="program-name" rows="1" data-i="${x.i}" data-k="n" data-key="${x.i}.n" aria-label="Program name for ${esc(x.n)}" title="Edit program name; click outside the field to save">${esc(x.n)}</textarea><small>${x.subs.length} subprogram${x.subs.length == 1 ? "" : "s"}</small></div></div></td>
-  <td><select data-i="${x.i}" data-k="a" data-key="${x.i}.a" aria-label="Subfunction for ${esc(x.n)}" style="max-width:260px;width:100%">${areaOpts(x.a)}</select></td>
+            let h = `<tr><td><div class="nm"><button class="tg" data-tg="${x.i}" aria-expanded="${!!x.open}" aria-label="${x.open ? "Close" : "Show"} subprograms for ${esc(x.n)}">${x.open ? "-" : "+"}</button><div class="program-details">${canEdit ? `<textarea class="program-name" rows="1" data-i="${x.i}" data-k="n" data-key="${x.i}.n" aria-label="Program name for ${esc(x.n)}" title="Edit program name; click outside the field to save">${esc(x.n)}</textarea>` : `<b>${esc(x.n)}</b>`}<small>${x.subs.length} subprogram${x.subs.length == 1 ? "" : "s"}</small></div></div></td>
+  <td>${canEdit ? `<select data-i="${x.i}" data-k="a" data-key="${x.i}.a" aria-label="Subfunction for ${esc(x.n)}" style="max-width:260px;width:100%">${areaOpts(x.a)}</select>` : esc(x.a || '—')}</td>
   <td><div class="pill" style="--c:${col}">${ST[x.c.s][0]}</div></td>
   <td><div class="prog" style="--c:${progressCol};${od ? "color:var(--bad)" : ""}"><div><i style="width:${x.c.p || 0}%"></i></div><span class="pct">${x.c.p == null ? "–" : x.c.p + "%"}</span></div>${x.subs.length && !x.c.valid ? `<small style="color:var(--bad)">Total weight: ${x.c.weight}%; must be 100%.</small>` : ""}</td>
-  <td><input type="date" value="${esc(x.d || "")}" data-i="${x.i}" data-k="d" data-key="${x.i}.d" aria-label="Target date for ${esc(x.n)}" style="background:transparent;border:1px solid var(--line);border-radius:4px;padding:3px 6px;${od ? "color:var(--bad)" : ""}">${od ? "<small>Target date passed</small>" : ""}</td>
-  <td><input type="text" value="${esc(x.t || "")}" data-i="${x.i}" data-k="t" data-key="${x.i}.t" placeholder="Add remarks" aria-label="Remarks for ${esc(x.n)}" style="background:transparent;border:1px solid var(--line);border-radius:4px;padding:3px 6px;width:100%"></td>
-  <td><button class="x" data-del="${x.i}" aria-label="Delete ${esc(x.n)}">Delete</button></td></tr>`;
+  <td>${canEdit ? `<input type="date" value="${esc(x.d || "")}" data-i="${x.i}" data-k="d" data-key="${x.i}.d" aria-label="Target date for ${esc(x.n)}" style="background:transparent;border:1px solid var(--line);border-radius:4px;padding:3px 6px;${od ? "color:var(--bad)" : ""}">` : `<span${od ? ' style="color:var(--bad)"' : ""}>${dateLabel(x.d)}</span>`}${od ? "<small>Target date passed</small>" : ""}</td>
+  <td>${canEdit ? `<input type="text" value="${esc(x.t || "")}" data-i="${x.i}" data-k="t" data-key="${x.i}.t" placeholder="Add remarks" aria-label="Remarks for ${esc(x.n)}" style="background:transparent;border:1px solid var(--line);border-radius:4px;padding:3px 6px;width:100%">` : `<span class="view-remarks">${esc(x.t || '—')}</span>`}</td>
+  <td>${canEdit ? `<button class="x" data-del="${x.i}" aria-label="Delete ${esc(x.n)}">Delete</button>` : ""}</td></tr>`;
             if (x.open) h += `<tr class="sub"><td colspan="7">${subtable(x)}</td></tr>`;
             return h
         }).join("");
@@ -152,7 +160,7 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
     $("kpis").onclick = e => { const b = e.target.closest("[data-f]"); if (b) { filter = b.dataset.f; render() } };
     $("rows").onchange = async e => {
         const t = e.target, i = t.dataset.i, j = t.dataset.j, k = t.dataset.k;
-        if (i == null || busy || !loaded) return;
+        if (i == null || busy || !loaded || !canEdit) return;
         const program = data[+i];
         const target = j == null ? program : program?.subs[+j];
         if (!target || k == "p" || (j == null && (k == "s" || k == "w"))) return;
@@ -174,6 +182,7 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
         if (close) { const x = data[+close.dataset.close]; x.open = false; openState.set(x.id, false); render(); document.querySelector('[data-tg="' + close.dataset.close + '"]')?.focus(); return }
         const toggle = e.target.closest("[data-tg]");
         if (toggle) { const x = data[+toggle.dataset.tg]; x.open = !x.open; openState.set(x.id, x.open); render(); return }
+        if (!canEdit) return;
         const add = e.target.closest("[data-as]");
         if (add) {
             const x = data[+add.dataset.as];
@@ -200,7 +209,7 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
         render();
     };
     $("addBtn").onclick = async () => {
-        if (busy || !loaded) return;
+        if (busy || !loaded || !canEdit) return;
         const name = $("nName").value.trim();
         if (!name) { $("nName").focus(); return }
         let fields;
@@ -220,5 +229,98 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
         root.dataset.theme = dark ? "light" : "dark";
     };
     render();
-    return { start: loadInitialData };
+    return { start: loadInitialData, setCanEdit(value) { canEdit = value === true; render() } };
+}
+
+export function mountLogin({ document, dashboard, getAuth }) {
+    const $ = id => document.getElementById(id);
+    const dialog = $("loginDialog"), form = $("loginForm"), button = $("login");
+    let authPromise, unsubscribe, timer, generation = 0, working = false;
+    let access = { user: null, canEdit: false };
+    function apply(next) {
+        access = next;
+        dashboard.setCanEdit(next.canEdit);
+        button.textContent = next.user ? "Logout" : "Login";
+        $("accessMode").textContent = next.canEdit ? "Editor" : "View only";
+    }
+    function setWorking(value) {
+        working = value;
+        button.disabled = value;
+        form.querySelectorAll('input, button').forEach(control => control.disabled = value);
+        form.setAttribute('aria-busy', String(value));
+    }
+    function message(text = "") {
+        $("loginError").textContent = text;
+        $("loginError").hidden = !text;
+    }
+    async function connect() {
+        if (!authPromise) authPromise = getAuth().then(auth => {
+            unsubscribe = auth.onChange(() => {
+                if (working) return;
+                ++generation;
+                apply({ user: null, canEdit: false });
+                clearTimeout(timer);
+                // Supabase auth callbacks must return before making other auth calls.
+                timer = setTimeout(() => { void refresh() }, 0);
+            });
+            return auth;
+        }).catch(error => { authPromise = null; throw error });
+        return authPromise;
+    }
+    async function refresh() {
+        const revision = ++generation;
+        apply({ user: null, canEdit: false });
+        try {
+            const service = await connect();
+            const next = await service.getAccess();
+            if (revision !== generation) return false;
+            apply(next);
+            return true;
+        } catch (error) {
+            if (revision === generation) {
+                apply({ user: null, canEdit: false });
+                message(error.message);
+            }
+            return false;
+        }
+    }
+    button.onclick = async () => {
+        if (working) return;
+        if (!access.user) {
+            message();
+            dialog.showModal();
+            $("loginEmail").focus();
+            return;
+        }
+        ++generation;
+        apply({ user: null, canEdit: false });
+        setWorking(true);
+        try { await (await connect()).signOut() }
+        catch (error) { message(error.message); dialog.showModal() }
+        finally { setWorking(false) }
+    };
+    form.onsubmit = async event => {
+        event.preventDefault();
+        if (working || !form.reportValidity()) return;
+        message();
+        ++generation;
+        apply({ user: null, canEdit: false });
+        setWorking(true);
+        try {
+            const service = await connect();
+            await service.signIn($("loginEmail").value.trim(), $("loginPassword").value);
+            const verified = await refresh();
+            if (verified && access.canEdit) dialog.close();
+            else if (verified) message("This account has view-only access. Contact the administrator to request editor access.");
+        } catch (error) { message(error.message) }
+        finally { $("loginPassword").value = ""; setWorking(false) }
+    };
+    $("loginCancel").onclick = () => dialog.close();
+    dialog.oncancel = event => { if (working) event.preventDefault() };
+    dialog.addEventListener('close', () => { $("loginPassword").value = ""; message() });
+    apply(access);
+    return {
+        start: refresh,
+        destroy() { ++generation; clearTimeout(timer); unsubscribe?.(); if ($("rows")) dashboard.setCanEdit(false) }
+    };
 }

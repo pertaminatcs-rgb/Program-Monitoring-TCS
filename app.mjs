@@ -1,6 +1,6 @@
 import { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY } from './supabase/config.mjs';
-import { createDashboardStore } from './supabase/store.mjs';
-import { mountDashboard } from './dashboard.mjs';
+import { createDashboardStore, createDashboardAuth } from './supabase/store.mjs';
+import { mountDashboard, mountLogin } from './dashboard.mjs';
 
 function loadSdk() {
     if (globalThis.supabase?.createClient) return Promise.resolve(globalThis.supabase);
@@ -15,15 +15,21 @@ function loadSdk() {
     });
 }
 
-const dashboard = mountDashboard({
-    document,
-    getStore: async () => {
+let clientPromise;
+function getClient() {
+    if (!clientPromise) clientPromise = (async () => {
         if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) throw new Error('The data connection has not been configured.');
         const sdk = await loadSdk();
-        const client = sdk.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-            auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+        return sdk.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+            auth: { persistSession: true, storage: globalThis.sessionStorage, autoRefreshToken: true, detectSessionInUrl: false }
         });
-        return createDashboardStore(client);
-    }
+    })().catch(error => { clientPromise = null; throw error });
+    return clientPromise;
+}
+
+const dashboard = mountDashboard({
+    document,
+    getStore: async () => createDashboardStore(await getClient())
 });
-await dashboard.start();
+const login = mountLogin({ document, dashboard, getAuth: async () => createDashboardAuth(await getClient()) });
+await Promise.all([dashboard.start(), login.start()]);

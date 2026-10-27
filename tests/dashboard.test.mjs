@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { createDashboardStore } from '../supabase/store.mjs';
-import { mountDashboard } from '../dashboard.mjs';
+import { createDashboardStore, createDashboardAuth } from '../supabase/store.mjs';
+import { mountDashboard, mountLogin } from '../dashboard.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dependencyRoot = process.env.TCS_TEST_MODULE_ROOT;
@@ -15,16 +15,20 @@ const { JSDOM } = requireDependency('jsdom');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const schema = fs.readFileSync(path.join(root, 'supabase/schema.sql'), 'utf8');
 const autoWeights = fs.readFileSync(path.join(root, 'supabase/auto-weights.sql'), 'utf8');
+const requireLogin = fs.readFileSync(path.join(root, 'supabase/require-login.sql'), 'utf8');
+const editorId = '11111111-1111-4111-8111-111111111111';
+const viewerId = '22222222-2222-4222-8222-222222222222';
 
 // Emulate the Supabase query interface with real PostgreSQL queries.
-// Requests are executed as the anon role, so grants, RLS, views and constraints apply.
+// Requests use actual PostgreSQL roles, grants, RLS, views and constraints.
 function databaseClient(db) {
     const tables = new Set(['tcs_subfunctions', 'tcs_programs', 'tcs_subprograms', 'tcs_program_summary', 'tcs_subfunction_summary']);
     const identifier = name => { assert.match(name, /^[a-z_]+$/); return `"${name}"`; };
     return {
         async rpc(name, args) {
-            assert.equal(name, 'tcs_add_subprogram_equal_weights');
             try {
+                if (name === 'tcs_can_edit') return { data: (await db.query('select public.tcs_can_edit() as allowed')).rows[0].allowed, error: null };
+                assert.equal(name, 'tcs_add_subprogram_equal_weights');
                 const { rows } = await db.query('select public.tcs_add_subprogram_equal_weights($1, $2) as result', [args.p_program_id, args.p_name]);
                 return { data: rows[0].result, error: null };
             } catch (error) { return { data: null, error: { message: error.message } }; }
@@ -72,17 +76,31 @@ function databaseClient(db) {
 
 async function fixture(t, wrapStore = store => store) {
     const db = new PGlite();
-    await db.exec('create role anon nologin; create role authenticated nologin;');
+    await db.exec(`create role anon nologin; create role authenticated nologin;
+        create schema auth;
+        create table auth.users (id uuid primary key, email text);
+        create function auth.uid() returns uuid language sql stable as $$
+            select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+        $$;
+        grant usage on schema auth to anon, authenticated;
+        insert into auth.users values ('${editorId}', 'editor@example.test'), ('${viewerId}', 'viewer@example.test');`);
     await db.exec(schema);
     await db.exec(autoWeights);
+    await db.exec(requireLogin);
+    await db.query('insert into public.tcs_editors (user_id) values ($1)', [editorId]);
     const dom = new JSDOM(html, { url: 'http://127.0.0.1:5500/' });
     const document = dom.window.document;
     // Previous local data must not leak into the shared dashboard, or be cleared.
     dom.window.localStorage.setItem('pm-dash-v3', '[{"n":"Data browser lama","subs":[]}]');
-    await db.exec('set role anon;');
+    const switchRole = async (role, id = '') => {
+        assert.ok(['anon', 'authenticated'].includes(role));
+        await db.exec(`reset role; set role ${role};`);
+        await db.query("select set_config('request.jwt.claim.sub', $1, false)", [id]);
+    };
+    await switchRole('authenticated', editorId);
     const store = createDashboardStore(databaseClient(db));
     const errors = [];
-    const app = mountDashboard({ document, getStore: async () => wrapStore(store), confirm: () => true, matchMedia: () => ({ matches: false }), notifyError: text => errors.push(text) });
+    const app = mountDashboard({ document, getStore: async () => wrapStore(store), canEdit: true, confirm: () => true, matchMedia: () => ({ matches: false }), notifyError: text => errors.push(text) });
     t.after(async () => { dom.window.close(); await db.close(); });
     await app.start();
     const click = async selector => { const target = document.querySelector(selector); assert.ok(target, selector); await document.getElementById('rows').onclick({ target }); };
@@ -100,7 +118,7 @@ async function fixture(t, wrapStore = store => store) {
         await document.getElementById('addBtn').onclick();
     };
     const addSub = async name => { document.querySelector('[data-ni="0"]').value = name; await click('[data-as="0"]'); };
-    return { db, dom, document, store, app, click, edit, addProgram, addSub, errors };
+    return { db, dom, document, store, app, click, edit, addProgram, addSub, errors, switchRole };
 }
 
 test('startup reads shared database, leaves old browser data untouched, and exposes four empty charts', async t => {
@@ -156,7 +174,7 @@ test('edits use database UUIDs and persist subfunctions, dates, names and notes'
 test('renamed subfunction keeps legacy database references, records, filters and chart counts working', async t => {
     const f = await fixture(t);
     const label = 'Terminal Code & Standar';
-    await f.db.exec("reset role; update public.tcs_subfunctions set name = 'Terminal Code & Standardization' where id = 3; set role anon;");
+    await f.db.exec("reset role; update public.tcs_subfunctions set name = 'Terminal Code & Standardization' where id = 3; set role authenticated;");
     await f.app.start();
     await f.addProgram();
     await f.edit(null, 'a', label);
@@ -180,7 +198,7 @@ test('renamed subfunction keeps legacy database references, records, filters and
     };
     checkDisplay();
 
-    await f.db.exec("reset role; update public.tcs_subfunctions set name = 'Terminal Code & Standar' where id = 3; set role anon;");
+    await f.db.exec("reset role; update public.tcs_subfunctions set name = 'Terminal Code & Standar' where id = 3; set role authenticated;");
     await f.app.start();
     checkDisplay();
     const after = (await f.store.load()).programs[0];
@@ -243,12 +261,17 @@ test('failed startup blocks writes and allows a retry', async t => {
     assert.equal(f.document.getElementById('addBtn').disabled, false);
 });
 
-test('SQL verification passes and rerunning schema retains program records', async t => {
+test('rerunning legacy SQL and login migration preserves records and keeps anonymous writes blocked', async t => {
     const f = await fixture(t); await f.addProgram('Tetap ada');
     await f.db.exec('reset role;');
     await f.db.exec(schema);
-    const result = await f.db.exec(fs.readFileSync(path.join(root, 'supabase/checks.sql'), 'utf8'));
-    assert.match(result.flatMap(r => r.rows || [])[0].result, /PASS/);
+    await f.db.exec(autoWeights);
+    await f.switchRole('anon');
+    await assert.rejects(f.store.createProgram({ name: 'Must be blocked' }), /row-level security/);
+    await f.db.exec('reset role;');
+    await f.db.exec(requireLogin);
+    await f.db.exec(requireLogin);
+    await f.switchRole('authenticated', editorId);
     assert.equal((await f.store.load()).programs[0].name, 'Tetap ada');
 });
 
@@ -299,7 +322,7 @@ test('a failure while redistributing weights rolls back the newly inserted child
     await f.db.exec(`reset role;
         create function public.tcs_test_fail_weight() returns trigger language plpgsql as $$ begin raise exception 'Simulated rebalance failure'; end; $$;
         create trigger tcs_test_fail_weight before update of weight on public.tcs_subprograms for each row execute function public.tcs_test_fail_weight();
-        set role anon;`);
+        set role authenticated;`);
     await f.addSub('Tidak boleh tersimpan');
     const program = (await f.store.load()).programs[0];
     assert.equal(program.subprograms.length, 1);
@@ -316,7 +339,7 @@ test('upgrade converts decimal weights to whole numbers while keeping a valid to
         update public.tcs_subprograms set weight = case sort_order when 2 then 33.34 else 33.33 end;`);
     await f.db.exec(autoWeights);
     await f.db.exec(autoWeights);
-    await f.db.exec('set role anon;');
+    await f.db.exec('set role authenticated;');
     const program = (await f.store.load()).programs[0];
     assert.deepEqual(program.subprograms.map(u => Number(u.weight)), [33, 33, 34]);
     assert.equal(Number(program.weight_total), 100);
@@ -396,4 +419,173 @@ test('overdue subprogram targets turn green when finished and red when unfinishe
     await f.edit(0, 'd', ''); checkTarget(false);
     await f.edit(null, 'd', '2000-01-01'); checkTarget(false);
     assert.deepEqual(f.errors, []);
+});
+
+test('anonymous and unapproved signed-in users can read but cannot write via tables or RPC', async t => {
+    const f = await fixture(t); await f.addProgram('Shared program'); await f.addSub('Shared stage');
+    const before = (await f.store.load()).programs[0];
+    for (const [role, id] of [['anon', ''], ['authenticated', viewerId]]) {
+        await f.switchRole(role, id);
+        const client = databaseClient(f.db);
+        assert.equal((await client.rpc('tcs_can_edit')).data, false);
+        assert.equal((await f.store.load()).programs[0].name, 'Shared program');
+        for (const write of [
+            () => f.store.createProgram({ name: 'Blocked program' }),
+            () => f.store.updateProgram(before.id, { name: 'Blocked rename' }),
+            () => f.store.deleteProgram(before.id),
+            () => f.store.createSubprogram(before.id, { name: 'Blocked child' }),
+            () => f.store.updateSubprogram(before.subprograms[0].id, { notes: 'Blocked edit' }),
+            () => f.store.deleteSubprogram(before.subprograms[0].id),
+            () => f.store.addSubprogramWithEqualWeights(before.id, 'Blocked RPC child')
+        ]) await assert.rejects(write());
+        await assert.rejects(f.db.query('insert into public.tcs_editors (user_id) values ($1)', [viewerId]), /permission denied/);
+        assert.deepEqual((await f.store.load()).programs[0], before);
+    }
+    await f.switchRole('anon');
+    const grants = await f.db.query(`select
+        has_column_privilege('anon', 'public.tcs_programs', 'name', 'INSERT') as can_insert,
+        has_column_privilege('anon', 'public.tcs_subprograms', 'notes', 'UPDATE') as can_update`);
+    assert.deepEqual(grants.rows[0], { can_insert: false, can_update: false });
+});
+
+test('approved editors keep CRUD and RPC access, and removing approval takes effect immediately', async t => {
+    const f = await fixture(t);
+    assert.equal((await databaseClient(f.db).rpc('tcs_can_edit')).data, true);
+    await f.addProgram(); await f.addSub('Editable');
+    await f.edit(0, 's', 'finish'); await f.edit(null, 'n', 'Renamed by editor');
+    const before = (await f.store.load()).programs[0];
+    await f.db.exec('reset role;');
+    await f.db.query('delete from public.tcs_editors where user_id = $1', [editorId]);
+    await f.switchRole('authenticated', editorId);
+    assert.equal((await databaseClient(f.db).rpc('tcs_can_edit')).data, false);
+    await assert.rejects(f.store.updateProgram(before.id, { name: 'Not allowed anymore' }));
+    await assert.rejects(f.store.addSubprogramWithEqualWeights(before.id, 'Not allowed anymore'));
+    assert.deepEqual((await f.store.load()).programs[0], before);
+    await f.db.exec('reset role;');
+    const grant = fs.readFileSync(path.join(root, 'supabase/grant-editor.sql'), 'utf8').replace(/editor_email text := '[^']+'/, "editor_email text := 'editor@example.test'");
+    await f.db.exec(grant); await f.db.exec(grant);
+    await f.switchRole('authenticated', editorId);
+    await f.store.deleteProgram(before.id);
+    assert.equal((await f.store.load()).programs.length, 0);
+});
+
+test('view-only UI keeps search, filters and expansion while blocking forged edit and delete events', async t => {
+    const f = await fixture(t); await f.addProgram('Public program'); await f.addSub('Public stage');
+    const before = (await f.store.load()).programs[0];
+    f.app.setCanEdit(false);
+    assert.equal(f.document.querySelector('.add').hidden, true);
+    assert.equal(f.document.querySelectorAll('#rows input, #rows textarea, #rows select, [data-del], [data-ds], [data-as]').length, 0);
+    assert.match(f.document.getElementById('rows').textContent, /Public stage/);
+    await f.click('[data-close="0"]'); await f.click('[data-tg="0"]');
+    f.document.getElementById('q').value = 'Public'; f.document.getElementById('q').oninput();
+    assert.equal(f.document.getElementById('empty').hidden, true);
+    const forgedInput = f.document.createElement('input');
+    Object.assign(forgedInput.dataset, { i: '0', k: 'n' }); forgedInput.value = 'Forged rename';
+    await f.document.getElementById('rows').onchange({ target: forgedInput });
+    const forgedDelete = f.document.createElement('button'); forgedDelete.dataset.del = '0';
+    await f.document.getElementById('rows').onclick({ target: forgedDelete });
+    await f.document.getElementById('addBtn').onclick();
+    assert.deepEqual((await f.store.load()).programs[0], before);
+    f.app.setCanEdit(true);
+    assert.equal(f.document.querySelector('.add').hidden, false);
+    assert.equal(f.document.querySelector('.program-name').value, 'Public program');
+});
+
+test('login UI handles invalid login, approved login, logout and expired sessions without retaining passwords', async t => {
+    const f = await fixture(t); await f.addProgram();
+    const dialog = f.document.getElementById('loginDialog');
+    dialog.showModal = () => { dialog.open = true };
+    dialog.close = () => { dialog.open = false; dialog.dispatchEvent(new f.dom.window.Event('close')) };
+    let current = { user: null, canEdit: false }, listener;
+    const auth = {
+        onChange(fn) { listener = fn; return () => { listener = null } },
+        async getAccess() { return current },
+        async signIn(email, password) {
+            if (password !== 'test-password') throw new Error('Invalid login');
+            current = { user: { id: editorId, email }, canEdit: email === 'editor@example.test' };
+            listener('SIGNED_IN');
+        },
+        async signOut() { current = { user: null, canEdit: false }; listener('SIGNED_OUT') }
+    };
+    const login = mountLogin({ document: f.document, dashboard: f.app, getAuth: async () => auth });
+    t.after(() => login.destroy());
+    await login.start();
+    assert.equal(f.document.querySelector('.program-name'), null);
+    await f.document.getElementById('login').onclick();
+    assert.equal(dialog.open, true);
+    f.document.getElementById('loginEmail').value = 'editor@example.test';
+    const submit = async password => {
+        f.document.getElementById('loginPassword').value = password;
+        await f.document.getElementById('loginForm').onsubmit({ preventDefault() {} });
+        assert.equal(f.document.getElementById('loginPassword').value, '');
+    };
+    await submit('wrong-password');
+    assert.equal(dialog.open, true);
+    assert.match(f.document.getElementById('loginError').textContent, /Invalid login/);
+    assert.equal(f.document.querySelector('.program-name'), null);
+    f.document.getElementById('loginEmail').value = 'viewer@example.test';
+    await submit('test-password');
+    assert.equal(dialog.open, true);
+    assert.match(f.document.getElementById('loginError').textContent, /view-only access/);
+    assert.equal(f.document.querySelector('.program-name'), null);
+    f.document.getElementById('loginEmail').value = 'editor@example.test';
+    await submit('test-password');
+    assert.equal(dialog.open, false);
+    assert.ok(f.document.querySelector('.program-name'));
+    assert.equal(f.document.getElementById('login').textContent, 'Logout');
+    await f.document.getElementById('login').onclick();
+    assert.equal(f.document.querySelector('.program-name'), null);
+    assert.equal(f.document.getElementById('login').textContent, 'Login');
+    await f.document.getElementById('login').onclick(); await submit('test-password');
+    current = { user: null, canEdit: false }; listener('SIGNED_OUT');
+    assert.equal(f.document.querySelector('.program-name'), null);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(f.document.getElementById('accessMode').textContent, 'View only');
+});
+
+test('auth adapter verifies user identity and database approval instead of trusting local session or user metadata', async () => {
+    let session = null, user = null, approval = false, userError = null, rpcError = null, rpcCalls = 0;
+    const service = createDashboardAuth({
+        auth: {
+            async getSession() { return { data: { session }, error: null } },
+            async getUser() { return { data: { user }, error: userError } }
+        },
+        async rpc(name) { assert.equal(name, 'tcs_can_edit'); rpcCalls++; return { data: approval, error: rpcError } }
+    });
+    assert.deepEqual(await service.getAccess(), { user: null, canEdit: false });
+    assert.equal(rpcCalls, 0);
+    session = { user: { id: editorId, user_metadata: { admin: true } } };
+    user = session.user;
+    assert.equal((await service.getAccess()).canEdit, false);
+    approval = true;
+    assert.equal((await service.getAccess()).canEdit, true);
+    rpcError = new Error('Missing function');
+    await assert.rejects(service.getAccess(), /could not be verified/);
+    userError = new Error('Invalid token');
+    await assert.rejects(service.getAccess(), /session has expired/);
+});
+
+test('a stale access check cannot restore editor controls after a signed-out event', async t => {
+    const dom = new JSDOM(html);
+    let listener, resolveAccess, signalStarted, canEdit = false;
+    const started = new Promise(resolve => { signalStarted = resolve });
+    const pending = new Promise(resolve => { resolveAccess = resolve });
+    let calls = 0;
+    const login = mountLogin({
+        document: dom.window.document,
+        dashboard: { setCanEdit(value) { canEdit = value } },
+        getAuth: async () => ({
+            onChange(fn) { listener = fn; return () => {} },
+            getAccess() { if (++calls === 1) { signalStarted(); return pending } return Promise.resolve({ user: null, canEdit: false }) }
+        })
+    });
+    t.after(() => { login.destroy(); dom.window.close() });
+    const first = login.start();
+    await started;
+    listener('SIGNED_OUT');
+    await new Promise(resolve => setTimeout(resolve, 20));
+    resolveAccess({ user: { id: editorId }, canEdit: true });
+    await first;
+    assert.equal(canEdit, false);
+    assert.equal(dom.window.document.getElementById('login').textContent, 'Login');
 });

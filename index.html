@@ -66,6 +66,10 @@
             box-sizing: border-box
         }
 
+        [hidden] {
+            display: none !important
+        }
+
         body {
             margin: 0;
             background: var(--bg);
@@ -86,6 +90,68 @@
             align-items: flex-end;
             gap: 10px;
             margin-bottom: 16px
+        }
+
+        .header-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center
+        }
+
+        .access-mode {
+            color: var(--mute);
+            font-size: 13px
+        }
+
+        .login-dialog {
+            width: min(420px, calc(100% - 32px));
+            background: var(--panel);
+            color: var(--ink);
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 24px
+        }
+
+        .login-dialog::backdrop {
+            background: #0008
+        }
+
+        .login-dialog h2 {
+            margin: 0 0 8px;
+            font: 600 24px "Barlow Condensed", sans-serif
+        }
+
+        .login-dialog label {
+            display: block;
+            margin-top: 14px
+        }
+
+        .login-dialog input {
+            display: block;
+            margin-top: 4px;
+            width: 100%;
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 8px 10px
+        }
+
+        .login-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 20px
+        }
+
+        .login-error {
+            color: var(--bad);
+            margin: 12px 0 0
+        }
+
+        .view-remarks {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere
         }
 
         h1 {
@@ -604,7 +670,10 @@
                 <div class="sub">Function: TCS</div>
                 <div class="sub" id="date"></div>
             </div>
-            <div><button id="theme">Switch Theme</button>
+            <div class="header-actions">
+                <span class="access-mode" id="accessMode" aria-live="polite">View only</span>
+                <button id="theme">Switch Theme</button>
+                <button id="login">Login</button>
             </div>
         </header>
         <div class="kpis" id="kpis"></div>
@@ -632,13 +701,30 @@
             </table>
             <div class="empty" id="empty" hidden>No programs yet. Add a program to get started.</div>
         </div>
-        <div class="add">
+        <div class="add" hidden>
             <input id="nName" placeholder="Program name" aria-label="Program name">
             <select id="nArea" aria-label="Subfunction"></select>
             <input id="nDate" type="date" aria-label="Program target date">
             <button class="pri" id="addBtn">Add Program</button>
         </div>
     </div>
+    <dialog id="loginDialog" class="login-dialog" aria-labelledby="loginTitle" aria-describedby="loginDescription">
+        <form id="loginForm">
+            <h2 id="loginTitle">Editor Login</h2>
+            <p class="sub" id="loginDescription">Log in with your authorized account to add, edit, or delete data.</p>
+            <label for="loginEmail">Email
+                <input id="loginEmail" type="email" autocomplete="username" required>
+            </label>
+            <label for="loginPassword">Password
+                <input id="loginPassword" type="password" autocomplete="current-password" required>
+            </label>
+            <p id="loginError" class="login-error" role="alert" hidden></p>
+            <div class="login-actions">
+                <button id="loginCancel" type="button">Cancel</button>
+                <button id="loginSubmit" type="submit" class="pri">Login</button>
+            </div>
+        </form>
+    </dialog>
     <script type="module" src="./app.mjs"></script>
 </body>
 
