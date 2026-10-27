@@ -11,7 +11,7 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
     const references = new Map();
     const $ = id => document.getElementById(id);
     function syncControls() {
-        document.querySelectorAll('#rows input, #rows select, #rows button, .add input, .add select, #addBtn, #exp').forEach(control => control.disabled = busy || !loaded);
+        document.querySelectorAll('#rows input, #rows textarea, #rows select, #rows button, .add input, .add select, #addBtn, #exp').forEach(control => control.disabled = busy || !loaded);
         $("rows").setAttribute('aria-busy', String(busy));
     }
     function acceptSnapshot(snapshot) {
@@ -95,7 +95,7 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
         }).join("");
         $("chart").innerHTML = `<h2>Subprogram Summary by Subfunction</h2><div class="sub">Subprogram totals and status distribution for each subfunction.</div><div class="subfunction-charts">${charts}</div>${unassigned ? `<div class="sub" style="margin-top:10px">${unassigned} subprogram${unassigned == 1 ? " has" : "s have"} not been assigned to a TCS subfunction.</div>` : ""}`;
     }
-    const field = (x, j, k, type, value, label, overdue = false) => `<input type="${type}" ${type == "number" ? 'min="0" max="100" step="1"' : ""} value="${esc(value ?? "")}" data-i="${x.i}" data-j="${j}" data-k="${k}" data-key="${x.i}.${j}.${k}" aria-label="${esc(label)} for ${esc(x.subs[j].n)}"${overdue ? ' style="color:var(--bad)"' : ""}>${overdue ? '<small style="color:var(--bad)">Target date passed</small>' : ""}`;
+    const field = (x, j, k, type, value, label, dateState = "") => `<input type="${type}" ${type == "number" ? 'min="0" max="100" step="1"' : ""} value="${esc(value ?? "")}" data-i="${x.i}" data-j="${j}" data-k="${k}" data-key="${x.i}.${j}.${k}" aria-label="${esc(label)} for ${esc(x.subs[j].n)}"${dateState ? ` style="color:var(--${dateState == "finish" ? "ok" : "bad"})"` : ""}>${dateState == "overdue" ? '<small style="color:var(--bad)">Target date passed</small>' : ""}`;
     function subtable(x) {
         const c = x.c;
         const warning = x.subs.length && !c.valid;
@@ -107,7 +107,7 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
             <td>${field(x, j, "n", "text", u.n, "Subprogram name")}</td>
             <td><select data-i="${x.i}" data-j="${j}" data-k="a" data-key="${x.i}.${j}.a" aria-label="Subfunction for ${esc(u.n)}">${areaOpts(u.a)}</select></td>
             <td><div class="pill" style="--c:${ST[statusKey(u.s)][1]}"><select data-i="${x.i}" data-j="${j}" data-k="s" data-key="${x.i}.${j}.s" aria-label="Status for ${esc(u.n)}">${stOpts(u.s)}</select></div></td>
-            <td>${field(x, j, "d", "date", u.d, "Target date", u.d && u.d < day(0))}</td>
+            <td>${field(x, j, "d", "date", u.d, "Target date", u.d && u.d < day(0) ? (u.s == "finish" ? "finish" : "overdue") : "")}</td>
             <td>${field(x, j, "t", "text", u.t, "Remarks")}</td>
             <td><button class="x" data-ds="${x.i}.${j}" aria-label="Delete ${esc(u.n)}">Delete</button></td>
         </tr>`).join("");
@@ -129,7 +129,7 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
         $("rows").innerHTML = list.map(x => {
             const col = ST[x.c.s][1], od = x.d && x.d < today && x.c.s != "finish";
             const progressCol = od ? "var(--bad)" : col;
-            let h = `<tr><td><div class="nm"><button class="tg" data-tg="${x.i}" aria-expanded="${!!x.open}" aria-label="${x.open ? "Close" : "Show"} subprograms for ${esc(x.n)}">${x.open ? "-" : "+"}</button><div><b>${esc(x.n)}</b><small>${x.subs.length} subprogram${x.subs.length == 1 ? "" : "s"}</small></div></div></td>
+            let h = `<tr><td><div class="nm"><button class="tg" data-tg="${x.i}" aria-expanded="${!!x.open}" aria-label="${x.open ? "Close" : "Show"} subprograms for ${esc(x.n)}">${x.open ? "-" : "+"}</button><div class="program-details"><textarea class="program-name" rows="1" data-i="${x.i}" data-k="n" data-key="${x.i}.n" aria-label="Program name for ${esc(x.n)}" title="Edit program name; click outside the field to save">${esc(x.n)}</textarea><small>${x.subs.length} subprogram${x.subs.length == 1 ? "" : "s"}</small></div></div></td>
   <td><select data-i="${x.i}" data-k="a" data-key="${x.i}.a" aria-label="Subfunction for ${esc(x.n)}" style="max-width:260px;width:100%">${areaOpts(x.a)}</select></td>
   <td><div class="pill" style="--c:${col}">${ST[x.c.s][0]}</div></td>
   <td><div class="prog" style="--c:${progressCol};${od ? "color:var(--bad)" : ""}"><div><i style="width:${x.c.p || 0}%"></i></div><span class="pct">${x.c.p == null ? "–" : x.c.p + "%"}</span></div>${x.subs.length && !x.c.valid ? `<small style="color:var(--bad)">Total weight: ${x.c.weight}%; must be 100%.</small>` : ""}</td>
@@ -139,8 +139,16 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
             if (x.open) h += `<tr class="sub"><td colspan="7">${subtable(x)}</td></tr>`;
             return h
         }).join("");
+        document.querySelectorAll('.program-name').forEach(resizeProgramName);
         syncControls();
     }
+    function resizeProgramName(input) {
+        input.style.height = "auto";
+        input.style.height = `${input.scrollHeight + 2}px`;
+    }
+    $("rows").oninput = e => {
+        if (e.target.matches('.program-name')) resizeProgramName(e.target);
+    };
     $("kpis").onclick = e => { const b = e.target.closest("[data-f]"); if (b) { filter = b.dataset.f; render() } };
     $("rows").onchange = async e => {
         const t = e.target, i = t.dataset.i, j = t.dataset.j, k = t.dataset.k;
@@ -155,7 +163,7 @@ export function mountDashboard({ document, getStore, confirm = globalThis.confir
             else if (k == "s") fields = { status: statusKey(t.value) };
             else if (k == "d") fields = { target_date: t.value || null };
             else if (k == "t") fields = { notes: t.value };
-            else if (k == "n") { const name = t.value.trim(); if (!name) throw new Error("Subprogram name is required."); fields = { name } }
+            else if (k == "n") { const name = t.value.trim(); if (!name) throw new Error(j == null ? "Program name is required." : "Subprogram name is required."); fields = { name } }
             else return;
         } catch (error) { render(); notifyError(error.message); return }
         await mutate(() => j == null ? store.updateProgram(target.id, fields) : store.updateSubprogram(target.id, fields));

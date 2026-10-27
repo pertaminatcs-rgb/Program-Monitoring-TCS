@@ -349,12 +349,34 @@ test('overdue unfinished programs show a red progress bar and percentage while s
     assert.equal(progress.querySelector('.pct').textContent, '100%');
 });
 
-test('overdue subprogram targets turn red independently of the program target and status', async t => {
+test('program names can be edited, persist after reload and reject blank names without changing children', async t => {
+    const f = await fixture(t); await f.addProgram(); await f.addSub('Tahap tetap');
+    const before = (await f.store.load()).programs[0];
+    const name = 'Pengelolaan Audit Internal & Eksternal <script>alert(1)</script>';
+    await f.edit(null, 'n', `  ${name}  `);
+    await f.app.start();
+    const after = (await f.store.load()).programs[0];
+    assert.equal(after.id, before.id);
+    assert.equal(after.name, name);
+    assert.deepEqual(after.subprograms, before.subprograms);
+    assert.equal(f.document.querySelector('.program-name').value, name);
+    assert.equal(f.document.querySelector('#rows script'), null);
+    await f.edit(null, 'n', '   ');
+    assert.equal((await f.store.load()).programs[0].name, name);
+    assert.equal(f.document.querySelector('.program-name').value, name);
+    assert.equal(f.errors.at(-1), 'Program name is required.');
+    f.document.getElementById('q').value = 'Audit Internal';
+    f.document.getElementById('q').oninput();
+    assert.equal(f.document.getElementById('empty').hidden, true);
+    assert.equal(f.document.querySelector('.program-name').value, name);
+});
+
+test('overdue subprogram targets turn green when finished and red when unfinished', async t => {
     const f = await fixture(t); await f.addProgram(); await f.addSub('Satu'); await f.addSub('Dua');
     await f.edit(null, 'd', '2099-01-01');
     const target = () => f.document.querySelector('[data-j="0"][data-k="d"]');
-    const checkTarget = overdue => {
-        assert.equal(target().style.color, overdue ? 'var(--bad)' : '');
+    const checkTarget = (overdue, finished = false) => {
+        assert.equal(target().style.color, finished ? 'var(--ok)' : overdue ? 'var(--bad)' : '');
         assert.equal(target().closest('td').querySelector('small')?.textContent ?? '', overdue ? 'Target date passed' : '');
         assert.equal(target().disabled, false);
     };
@@ -363,7 +385,8 @@ test('overdue subprogram targets turn red independently of the program target an
     assert.equal(f.document.querySelector('[data-j="1"][data-k="d"]').style.color, '');
     assert.equal(f.document.querySelector('.prog').style.getPropertyValue('--c'), 'var(--hold)');
     await f.edit(0, 's', 'ongoing'); checkTarget(true);
-    await f.edit(0, 's', 'finish'); checkTarget(true);
+    await f.edit(0, 's', 'finish'); checkTarget(false, true);
+    await f.app.start(); checkTarget(false, true);
     await f.edit(0, 's', 'initiate'); checkTarget(true);
 
     await f.edit(0, 'd', '2099-01-01'); checkTarget(false);

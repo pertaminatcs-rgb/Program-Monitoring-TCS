@@ -100,7 +100,8 @@
 
         button,
         select,
-        input {
+        input,
+        textarea {
             font: inherit;
             color: var(--ink)
         }
@@ -138,6 +139,7 @@
 
         button:disabled,
         input:disabled,
+        textarea:disabled,
         select:disabled {
             opacity: .65;
             cursor: wait
@@ -328,6 +330,24 @@
             display: flex;
             gap: 8px;
             align-items: flex-start
+        }
+
+        .program-details {
+            flex: 1;
+            min-width: 0
+        }
+
+        .program-name {
+            display: block;
+            width: 100%;
+            min-height: 30px;
+            background: transparent;
+            border: 1px solid var(--line);
+            border-radius: 4px;
+            padding: 3px 6px;
+            font-weight: 600;
+            resize: none;
+            overflow: hidden
         }
 
         .tg {
